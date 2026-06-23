@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+#
+# Git commit-msg hook: validates that the commit message contains a Jira ticket ID.
+# Pattern: uppercase letters + hyphen + digits (e.g., PROJ-123, ABC-42)
+#
+# Install: cp hooks/commit-msg .git/hooks/commit-msg && chmod +x .git/hooks/commit-msg
+#   or run: npm run setup-hooks
+
+COMMIT_MSG_FILE="$1"
+COMMIT_MSG=$(cat "$COMMIT_MSG_FILE")
+
+# Regex for Jira ticket ID: one or more uppercase letters, hyphen, one or more digits
+TICKET_REGEX='[A-Z][A-Z0-9]+-[0-9]+'
+
+if echo "$COMMIT_MSG" | grep -qE "\b${TICKET_REGEX}\b"; then
+    exit 0
+fi
+
+# No ticket ID found — reject the commit
+echo "" >&2
+echo "❌ Commit rejected: no Jira ticket ID found in commit message." >&2
+echo "" >&2
+echo "   Include a ticket key (e.g. PROJ-123) in your commit message and try again." >&2
+echo "   Example: PROJ-123: Add retry logic to payment webhook" >&2
+echo "" >&2
+exit 1

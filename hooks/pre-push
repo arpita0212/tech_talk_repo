@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+#
+# Git pre-push hook: transitions Jira tickets to "In Review" for pushed commits.
+# This reads push refs from stdin (standard Git pre-push hook protocol).
+#
+# Install: cp hooks/pre-push .git/hooks/pre-push && chmod +x .git/hooks/pre-push
+#   or run: npm run setup-hooks
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
+# Read push info from stdin
+# Format: <local-ref> <local-sha> <remote-ref> <remote-sha>
+while read -r local_ref local_sha remote_ref remote_sha; do
+    # Skip delete pushes
+    if [ "$local_sha" = "0000000000000000000000000000000000000000" ]; then
+        continue
+    fi
+
+    # Run the post-push orchestrator (non-blocking — don't fail the push)
+    if [ -f "$PROJECT_ROOT/dist/post-push.js" ]; then
+        node "$PROJECT_ROOT/dist/post-push.js" "$local_sha" "$remote_sha" 2>&1 || true
+    else
+        echo "[jira-hook] ⚠️  Post-push script not built. Run 'npm run build' first." >&2
+    fi
+done
+
+# Always allow the push to proceed
+exit 0

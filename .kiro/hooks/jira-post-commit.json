@@ -1,0 +1,13 @@
+{
+  "name": "Jira Post-Commit Update",
+  "version": "1.0.0",
+  "description": "After a successful commit, generates an LLM diff summary and posts it as a comment to the referenced Jira ticket(s).",
+  "when": {
+    "type": "postToolUse",
+    "toolTypes": ["shell"]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "If the last shell command was a successful git commit, run the post-commit Jira update: extract ticket IDs from the commit message, generate a diff summary, and post it as a comment to the Jira ticket. Use the project's src/post-commit.ts orchestrator logic. If the last command was not a git commit, do nothing."
+  }
+}
