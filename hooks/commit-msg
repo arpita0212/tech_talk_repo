@@ -1,26 +1,77 @@
 #!/usr/bin/env bash
 #
-# Git commit-msg hook: validates that the commit message contains a Jira ticket ID.
-# Pattern: uppercase letters + hyphen + digits (e.g., PROJ-123, ABC-42)
+# Git commit-msg hook: validates that the commit message contains a REAL Jira ticket ID.
+# 1. Checks format (regex)
+# 2. Verifies the ticket actually exists in Jira (API call)
 #
-# Install: cp hooks/commit-msg .git/hooks/commit-msg && chmod +x .git/hooks/commit-msg
-#   or run: npm run setup-hooks
+# Install: npm run setup-hooks
 
 COMMIT_MSG_FILE="$1"
 COMMIT_MSG=$(cat "$COMMIT_MSG_FILE")
 
-# Regex for Jira ticket ID: one or more uppercase letters, hyphen, one or more digits
+# Regex for Jira ticket ID
 TICKET_REGEX='[A-Z][A-Z0-9]+-[0-9]+'
 
-if echo "$COMMIT_MSG" | grep -qE "\b${TICKET_REGEX}\b"; then
+# Step 1: Check format
+TICKET_ID=$(echo "$COMMIT_MSG" | grep -oE "\b${TICKET_REGEX}\b" | head -1)
+
+if [ -z "$TICKET_ID" ]; then
+    echo "" >&2
+    echo "❌ Commit rejected: no Jira ticket ID found in commit message." >&2
+    echo "" >&2
+    echo "   Include a ticket key (e.g. PROJ-123) in your commit message and try again." >&2
+    echo "   Example: PROJ-123: Add retry logic to payment webhook" >&2
+    echo "" >&2
+    exit 1
+fi
+
+# Step 2: Load Jira credentials from .env or environment
+# Find project root (where .env lives) by looking for .git directory
+PROJECT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+
+# Try to load from .env file
+if [ -n "$PROJECT_ROOT" ] && [ -f "$PROJECT_ROOT/.env" ]; then
+    export $(grep -v '^#' "$PROJECT_ROOT/.env" | grep -v '^\s*$' | xargs) 2>/dev/null
+fi
+
+# Check if credentials are available
+if [ -z "$JIRA_BASE_URL" ] || [ -z "$JIRA_EMAIL" ] || [ -z "$JIRA_API_TOKEN" ]; then
+    echo "[jira-hook] ⚠️  Jira credentials not configured. Skipping ticket validation." >&2
+    echo "[jira-hook] Format check passed: $TICKET_ID" >&2
     exit 0
 fi
 
-# No ticket ID found — reject the commit
-echo "" >&2
-echo "❌ Commit rejected: no Jira ticket ID found in commit message." >&2
-echo "" >&2
-echo "   Include a ticket key (e.g. PROJ-123) in your commit message and try again." >&2
-echo "   Example: PROJ-123: Add retry logic to payment webhook" >&2
-echo "" >&2
-exit 1
+# Step 3: Verify ticket exists in Jira
+HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+    -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+    -H "Accept: application/json" \
+    "$JIRA_BASE_URL/rest/api/3/issue/$TICKET_ID?fields=status" \
+    --max-time 5)
+
+if [ "$HTTP_STATUS" = "200" ]; then
+    # Ticket exists — allow commit
+    exit 0
+elif [ "$HTTP_STATUS" = "404" ]; then
+    echo "" >&2
+    echo "❌ Commit rejected: ticket $TICKET_ID does not exist in Jira." >&2
+    echo "" >&2
+    echo "   Double-check the ticket ID and try again." >&2
+    echo "   Your Jira: $JIRA_BASE_URL" >&2
+    echo "" >&2
+    exit 1
+elif [ "$HTTP_STATUS" = "401" ] || [ "$HTTP_STATUS" = "403" ]; then
+    echo "" >&2
+    echo "❌ Commit rejected: Jira authentication failed ($HTTP_STATUS)." >&2
+    echo "" >&2
+    echo "   Check your JIRA_EMAIL and JIRA_API_TOKEN in .env" >&2
+    echo "" >&2
+    exit 1
+elif [ "$HTTP_STATUS" = "000" ]; then
+    # Network unreachable / timeout — allow commit with warning
+    echo "[jira-hook] ⚠️  Could not reach Jira (network issue). Allowing commit based on format only." >&2
+    exit 0
+else
+    # Unexpected status — allow commit with warning
+    echo "[jira-hook] ⚠️  Unexpected Jira response ($HTTP_STATUS). Allowing commit based on format only." >&2
+    exit 0
+fi
