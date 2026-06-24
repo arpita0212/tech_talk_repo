@@ -1,4 +1,6 @@
 import { execSync } from "node:child_process";
+import { resolve } from "node:path";
+import { config as loadDotenv } from "dotenv";
 import { loadConfig } from "./config.js";
 import { logger } from "./logger.js";
 import { extractTicketIds } from "./ticket-extractor.js";
@@ -26,6 +28,9 @@ export async function runPostPush(
   remoteSha: string
 ): Promise<void> {
   try {
+    // Load .env file for credentials and LLM key
+    const projectRoot = execSync("git rev-parse --show-toplevel", { encoding: "utf-8" }).trim();
+    loadDotenv({ path: resolve(projectRoot, ".env") });
     // Load config
     const configResult = loadConfig();
     if (!configResult.ok) {
@@ -93,7 +98,7 @@ export async function runPostPush(
         summary = buildFileListFallback(changedFiles);
       }
 
-      const comment = `🤖 Auto-summary from commit ${shortSha}:\n${summary}`;
+      const comment = `Auto-summary from commit ${shortSha}:\n${summary}`;
 
       // Post comment to each ticket referenced in this commit
       for (const ticketId of ticketIds) {
