@@ -5,10 +5,12 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
+    "postinstall": "node scripts/setup-hooks.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "tsc --noEmit",
-    "setup-hooks": "node scripts/setup-hooks.js"
+    "setup-hooks": "node scripts/setup-hooks.js",
+    "branch": "bash scripts/create-branch.sh"
   },
   "dependencies": {
     "axios": "^1.7.9",

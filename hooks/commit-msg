@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #
-# Git commit-msg hook: validates that the commit message contains a REAL Jira ticket ID.
-# 1. Checks format (regex)
-# 2. Verifies the ticket actually exists in Jira (API call)
+# Git commit-msg hook:
+# 1. Validates commit message contains a Jira ticket ID
+# 2. Verifies the ticket exists in Jira
+# 3. Ensures the ticket ID matches the branch name ticket
 #
-# Install: npm run setup-hooks
 
 COMMIT_MSG_FILE="$1"
 COMMIT_MSG=$(cat "$COMMIT_MSG_FILE")
@@ -12,7 +12,7 @@ COMMIT_MSG=$(cat "$COMMIT_MSG_FILE")
 # Regex for Jira ticket ID
 TICKET_REGEX='[A-Z][A-Z0-9]+-[0-9]+'
 
-# Step 1: Check format
+# Step 1: Check format — extract ticket ID from commit message
 TICKET_ID=$(echo "$COMMIT_MSG" | grep -oE "\b${TICKET_REGEX}\b" | head -1)
 
 if [ -z "$TICKET_ID" ]; then
@@ -25,11 +25,41 @@ if [ -z "$TICKET_ID" ]; then
     exit 1
 fi
 
-# Step 2: Load Jira credentials from .env or environment
-# Find project root (where .env lives) by looking for .git directory
+# Step 2: Check that commit ticket matches branch ticket
+BRANCH_NAME=$(git symbolic-ref --short HEAD 2>/dev/null)
+
+if [ -n "$BRANCH_NAME" ]; then
+    BRANCH_TICKET=$(echo "$BRANCH_NAME" | grep -oE "\b${TICKET_REGEX}\b" | head -1)
+
+    if [ -n "$BRANCH_TICKET" ]; then
+        # Branch has a ticket — commit ticket must match
+        if [ "$TICKET_ID" != "$BRANCH_TICKET" ]; then
+            echo "" >&2
+            echo "❌ Commit rejected: ticket ID mismatch." >&2
+            echo "" >&2
+            echo "   Branch ticket:  $BRANCH_TICKET (from branch '$BRANCH_NAME')" >&2
+            echo "   Commit ticket:  $TICKET_ID" >&2
+            echo "" >&2
+            echo "   Your commit message ticket must match the branch ticket." >&2
+            echo "   Use: $BRANCH_TICKET: your commit description" >&2
+            echo "" >&2
+            exit 1
+        fi
+    else
+        # Branch has NO ticket (e.g., main, develop) — block direct commits
+        echo "" >&2
+        echo "❌ Commit rejected: cannot commit directly to '$BRANCH_NAME'." >&2
+        echo "" >&2
+        echo "   Create a feature branch with a ticket ID first:" >&2
+        echo "   ./scripts/create-branch.sh $TICKET_ID your-description" >&2
+        echo "" >&2
+        exit 1
+    fi
+fi
+
+# Step 3: Load Jira credentials
 PROJECT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
 
-# Try to load from .env file
 if [ -n "$PROJECT_ROOT" ] && [ -f "$PROJECT_ROOT/.env" ]; then
     export $(grep -v '^#' "$PROJECT_ROOT/.env" | grep -v '^\s*$' | xargs) 2>/dev/null
 fi
@@ -37,11 +67,10 @@ fi
 # Check if credentials are available
 if [ -z "$JIRA_BASE_URL" ] || [ -z "$JIRA_EMAIL" ] || [ -z "$JIRA_API_TOKEN" ]; then
     echo "[jira-hook] ⚠️  Jira credentials not configured. Skipping ticket validation." >&2
-    echo "[jira-hook] Format check passed: $TICKET_ID" >&2
     exit 0
 fi
 
-# Step 3: Verify ticket exists in Jira
+# Step 4: Verify ticket exists in Jira
 HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
     -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
     -H "Accept: application/json" \
@@ -49,7 +78,6 @@ HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
     --max-time 5)
 
 if [ "$HTTP_STATUS" = "200" ]; then
-    # Ticket exists — allow commit
     exit 0
 elif [ "$HTTP_STATUS" = "404" ]; then
     echo "" >&2
@@ -67,11 +95,9 @@ elif [ "$HTTP_STATUS" = "401" ] || [ "$HTTP_STATUS" = "403" ]; then
     echo "" >&2
     exit 1
 elif [ "$HTTP_STATUS" = "000" ]; then
-    # Network unreachable / timeout — allow commit with warning
     echo "[jira-hook] ⚠️  Could not reach Jira (network issue). Allowing commit based on format only." >&2
     exit 0
 else
-    # Unexpected status — allow commit with warning
     echo "[jira-hook] ⚠️  Unexpected Jira response ($HTTP_STATUS). Allowing commit based on format only." >&2
     exit 0
 fi
