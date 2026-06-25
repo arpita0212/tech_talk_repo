@@ -14,8 +14,9 @@ import {
 
 const TARGET_STATUS = "Review";
 
-/** Prefixes that skip the status transition (case-insensitive) */
+/** Prefixes that control status transitions */
 const SKIP_PREFIXES = ["[wip]", "[no-review]", "[skip-review]"];
+const IN_PROGRESS_PREFIXES = ["[in-progress]", "[ip]", "[start]"];
 
 /**
  * Post-push orchestrator.
@@ -65,18 +66,11 @@ export async function runPostPush(
 
     const jira = new JiraClient(configResult.config);
     const allTicketIds = new Set<string>();
-    let hasSkipPrefix = false;
 
     // Post a comment for EACH commit
     for (const sha of commitShas) {
       const shortSha = sha.slice(0, 7);
       const commitMessage = execSync(`git log -1 --format=%B ${sha}`, { encoding: "utf-8" }).trim();
-
-      // Check for skip prefix in this commit
-      const lowerMsg = commitMessage.toLowerCase();
-      if (SKIP_PREFIXES.some((p) => lowerMsg.includes(p))) {
-        hasSkipPrefix = true;
-      }
 
       // Extract ticket IDs from this commit
       const ticketIds = extractTicketIds(commitMessage);
@@ -106,21 +100,39 @@ export async function runPostPush(
       }
     }
 
-    // Transition tickets to Review (unless skip prefix was found)
+    // Determine target status based on prefixes
+    const lowerAllMessages = commitShas.length > 0 ? "" : ""; // will check per-commit
+    let hasSkipPrefix = false;
+    let hasInProgressPrefix = false;
+
+    for (const sha of commitShas) {
+      const msg = execSync(`git log -1 --format=%B ${sha}`, { encoding: "utf-8" }).trim().toLowerCase();
+      if (SKIP_PREFIXES.some((p) => msg.includes(p))) hasSkipPrefix = true;
+      if (IN_PROGRESS_PREFIXES.some((p) => msg.includes(p))) hasInProgressPrefix = true;
+    }
+
+    // Determine final status
+    let targetStatus: string | null = null;
     if (hasSkipPrefix) {
+      targetStatus = null; // No transition
+    } else if (hasInProgressPrefix) {
+      targetStatus = "In Progress";
+    } else {
+      targetStatus = "Review";
+    }
+
+    // Transition tickets
+    if (targetStatus && allTicketIds.size > 0) {
+      logger.system(
+        `Transitioning ${allTicketIds.size} ticket(s) to "${targetStatus}": ${[...allTicketIds].join(", ")}`
+      );
+      for (const ticketId of allTicketIds) {
+        await jira.transitionTo(ticketId, targetStatus);
+      }
+    } else if (hasSkipPrefix) {
       logger.system(
         "Skip prefix detected. Comments posted but skipping status transition."
       );
-      return;
-    }
-
-    if (allTicketIds.size > 0) {
-      logger.system(
-        `Transitioning ${allTicketIds.size} ticket(s) to "${TARGET_STATUS}": ${[...allTicketIds].join(", ")}`
-      );
-      for (const ticketId of allTicketIds) {
-        await jira.transitionTo(ticketId, TARGET_STATUS);
-      }
     }
   } catch (error) {
     logger.systemError(
